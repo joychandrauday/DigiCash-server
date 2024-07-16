@@ -33,6 +33,9 @@ async function run() {
   try {
     await client.connect();
     const usersCollection = client.db("DigiCash").collection("users");
+    const transactionsCollection = client
+      .db("DigiCash")
+      .collection("transactions");
 
     // Verify Token Middleware
     const verifyToken = async (req, res, next) => {
@@ -54,9 +57,9 @@ async function run() {
       const email = req.user.email;
       const query = { email: email };
       const user = await usersCollection.findOne(query);
-      const isAdmin=user?.role === 'admin';
-      if(!isAdmin){
-        return res.status(403).send({message: 'forbidden access.'})
+      const isAdmin = user?.role === "admin";
+      if (!isAdmin) {
+        return res.status(403).send({ message: "forbidden access." });
       }
       next();
     };
@@ -67,7 +70,18 @@ async function run() {
       if (!name || !pin || !mobile || !email) {
         return res.status(400).json({ message: "All fields are required" });
       }
-
+      const exist= await usersCollection.findOne({ mobile: mobile });
+      if (exist) {
+        return res
+          .status(400)
+          .json({ message: "the number is already in use." });
+      }
+      const existEmail= await usersCollection.findOne({ email: email });
+      if (existEmail) {
+        return res
+          .status(400)
+          .send({ message: "the Email is already in use." });
+      }
       if (!/^\d{5}$/.test(pin)) {
         return res
           .status(400)
@@ -93,22 +107,42 @@ async function run() {
     });
 
     // Admin approval
-    app.post("/users/approve", async (req, res) => {
-      const { email } = req.body;
-      const user = await usersCollection.findOne({ email });
-
+    app.patch("/users/:mobile", async (req, res) => {
+      const mobile = req.params.mobile;
+      console.log(mobile);
+      const user = await usersCollection.findOne({ mobile: mobile });
+      console.log(user);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
 
       const updatedUser = await usersCollection.updateOne(
-        { email },
-        { $set: { status: "approved", balance: 40 } }
+        { mobile },
+        { $set: { role: "user", balance: 40 } }
       );
 
       res
         .status(200)
-        .json({ message: "User approved successfully", user: updatedUser });
+        .send({ message: "User approved successfully", user: updatedUser });
+    });
+    app.patch("/agent/:mobile", async (req, res) => {
+      const mobile = req.params.mobile;
+      console.log(mobile);
+      const user = await usersCollection.findOne({ mobile: mobile,isAgent: true });
+
+      console.log(user);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const updatedUser = await usersCollection.updateOne(
+        { isAgent: true , mobile:mobile },
+        { $set: { role: "agent", balance: 10000 } }
+      );
+
+      res
+        .status(200)
+        .send({ message: "User approved successfully", user: updatedUser });
     });
 
     // Login
@@ -162,28 +196,29 @@ async function run() {
       try {
         res
           .clearCookie("token", {
-            maxAge: 0,
+            httpOnly: true,
             secure: process.env.NODE_ENV === "production",
             sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+            path: "/", // Make sure the path matches where the cookie was set
           })
+          .status(200)
           .send({ success: true });
         console.log("Logout successful");
       } catch (err) {
         res.status(500).send(err);
       }
     });
-    app.get("/users", verifyToken,verifyAdmin, async (req, res) => {
+
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
       const cursor = usersCollection.find();
       const result = await cursor.toArray();
       res.send(result);
     });
-
     app.get("/protected", verifyToken, (req, res) => {
       res.status(200).send({ message: "This is a protected route" });
     });
     app.get("/user", verifyToken, async (req, res) => {
       try {
-        console.log(req.user);
         const user = await usersCollection.findOne({ email: req.user.email });
         if (!user) {
           return res.status(404).send({ message: "User not found" });
@@ -194,7 +229,125 @@ async function run() {
         res.status(500).send({ message: "Server error" });
       }
     });
+    app.get("/user/:phone", verifyToken, async (req, res) => {
+      try {
+        const phone = req.params.phone;
+        console.log(phone);
+        const user = await usersCollection.findOne({ mobile: phone });
+        if (!user) {
+          return res.status(404).send({ message: "User not found" });
+        }
+        res.status(200).send(user);
+      } catch (err) {
+        console.error("Error fetching user data:", err);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+    app.get("/users/agent", verifyToken, async (req, res) => {
+      try {
+        const query = { role: "agent" };
+        const result = await usersCollection.find(query).toArray();
+        res.send(result);
+      } catch (err) {
+        console.error("Error fetching user data:", err);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+    app.delete("/user/:mobile", async (req, res) => {
+      const mobile = req.params.mobile;
+      const query = { mobile:mobile };
+      const result = await usersCollection.deleteOne(query);
+      res.send(result);
+    });
+    //transactions
+    app.get("/transactions", verifyToken, async (req, res) => {
+      const cursor = transactionsCollection.find();
+      const result = await cursor.toArray();
+      res.send(result);
+    });
+    app.post("/transactions", verifyToken, async (req, res) => {
+      const { mobile, recipient, amount, totalAmount, pin, method } = req.body;
+      const user = await usersCollection.findOne({
+        $or: [{ mobile: mobile }],
+      });
+      // console.log(user);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
 
+      const isMatch = await bcrypt.compare(pin, user.pin);
+
+      if (!isMatch) {
+        return res.status(400).json({ message: "Invalid PIN" });
+      }
+      const digicashProfit = totalAmount - amount;
+      const transaction = {
+        mobile,
+        amount,
+        method,
+        recipient,
+        totalAmount,
+        digicashProfit,
+        timestamp: new Date(),
+      };
+      console.log(transaction);
+
+      /////////////////send  money/////////////////
+      if (method === "send-money") {
+        const session = await client.startSession();
+        session.startTransaction();
+
+        // Update the sender's balance
+        await usersCollection.updateOne(
+          { mobile: mobile },
+          { $inc: { balance: -totalAmount } },
+          { session }
+        );
+
+        // Update the recipient's balance
+        await usersCollection.updateOne(
+          { mobile: recipient },
+          { $inc: { balance: amount } },
+          { session }
+        );
+
+        // Insert the transaction
+        await transactionsCollection.insertOne(transaction, { session });
+
+        // Commit the transaction
+        await session.commitTransaction();
+        session.endSession();
+
+        res.status(201).send({ message: "Your transaction is successful." });
+      } else if (method === "cashout") {
+        /////////////////Cash Out/////////////////
+        const session = await client.startSession();
+        session.startTransaction();
+
+        // Update the sender's balance
+        await usersCollection.updateOne(
+          { mobile: mobile },
+          { $inc: { balance: -totalAmount } },
+          { session }
+        );
+
+        // Update the recipient's balance
+        await usersCollection.updateOne(
+          { mobile: recipient },
+          { $inc: { balance: amount } },
+          { session }
+        );
+
+        // Insert the transaction
+        await transactionsCollection.insertOne(transaction, { session });
+
+        // Commit the transaction
+        await session.commitTransaction();
+        session.endSession();
+
+        res.status(201).send({ message: "Your transaction is successful." });
+      }
+    });
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
