@@ -45,7 +45,6 @@ async function run() {
       }
       jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
         if (err) {
-          console.log(err);
           return res.status(401).json({ message: "unauthorized access" });
         }
         req.user = decoded;
@@ -65,7 +64,7 @@ async function run() {
     };
     // Registration
     app.post("/users/register", async (req, res) => {
-      const { name, pin, mobile, email, role, isAgent } = req.body;
+      const { name, pin, mobile, email, role, isAgent, image_url } = req.body;
 
       if (!name || !pin || !mobile || !email) {
         return res.status(400).json({ message: "All fields are required" });
@@ -97,6 +96,7 @@ async function run() {
         email,
         role,
         isAgent,
+        image_url,
         balance: 0,
       };
 
@@ -109,9 +109,7 @@ async function run() {
     // Admin approval
     app.patch("/users/:mobile", async (req, res) => {
       const mobile = req.params.mobile;
-      console.log(mobile);
       const user = await usersCollection.findOne({ mobile: mobile });
-      console.log(user);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -127,13 +125,11 @@ async function run() {
     });
     app.patch("/agent/:mobile", async (req, res) => {
       const mobile = req.params.mobile;
-      console.log(mobile);
       const user = await usersCollection.findOne({
         mobile: mobile,
         isAgent: true,
       });
 
-      console.log(user);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -141,6 +137,43 @@ async function run() {
       const updatedUser = await usersCollection.updateOne(
         { isAgent: true, mobile: mobile },
         { $set: { role: "agent", balance: 10000 } }
+      );
+
+      res
+        .status(200)
+        .send({ message: "User approved successfully", user: updatedUser });
+    });
+    app.patch("/make-agent/:mobile", async (req, res) => {
+      const mobile = req.params.mobile;
+      const user = await usersCollection.findOne({
+        mobile: mobile,
+      });
+
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const updatedUser = await usersCollection.updateOne(
+        { mobile: mobile },
+        { $set: { role: "agent", balance: 10000 } }
+      );
+
+      res
+        .status(200)
+        .send({ message: "User approved successfully", user: updatedUser });
+    });
+    app.patch("/admin/:mobile", async (req, res) => {
+      const mobile = req.params.mobile;
+      const user = await usersCollection.findOne({
+        mobile: mobile,
+      });
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const updatedUser = await usersCollection.updateOne(
+        { mobile: mobile },
+        { $set: { role: "admin" } }
       );
 
       res
@@ -206,7 +239,6 @@ async function run() {
           })
           .status(200)
           .send({ success: true });
-        console.log("Logout successful");
       } catch (err) {
         res.status(500).send(err);
       }
@@ -235,7 +267,6 @@ async function run() {
     app.get("/user/:phone", verifyToken, async (req, res) => {
       try {
         const phone = req.params.phone;
-        console.log(phone);
         const user = await usersCollection.findOne({ mobile: phone });
         if (!user) {
           return res.status(404).send({ message: "User not found" });
@@ -263,6 +294,37 @@ async function run() {
       res.send(result);
     });
     //transactions
+    app.get("/total-balance", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        // Aggregate to calculate the total balance
+        const result = await usersCollection
+          .aggregate([
+            {
+              $group: {
+                _id: null,
+                totalBalance: { $sum: "$balance" },
+              },
+            },
+          ])
+          .toArray();
+        const totalBalance = result[0]?.totalBalance || 0;
+        const formatter = new Intl.NumberFormat("en-BD", {
+          style: "currency",
+          currency: "BDT",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        const formattedBalance = formatter.format(totalBalance);
+
+        // Respond with the formatted total balance
+        res.json({
+          totalBalance: formattedBalance,
+        });
+      } catch (error) {
+        console.error("Error calculating total balance:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+      }
+    });
     app.get("/transactions", verifyToken, async (req, res) => {
       const cursor = transactionsCollection.find();
       const result = await cursor.toArray();
@@ -271,7 +333,6 @@ async function run() {
     app.get("/transactions/:mobile", verifyToken, async (req, res) => {
       try {
         const mobile = req.params.mobile;
-        console.log(mobile);
         const transaction = await transactionsCollection
           .find({ mobile: mobile })
           .toArray();
@@ -287,7 +348,6 @@ async function run() {
     app.get("/transactions-agent/:mobile", verifyToken, async (req, res) => {
       try {
         const mobile = req.params.mobile;
-        console.log(mobile);
 
         // Use the $or operator to match either recipient or mobile field
         const transaction = await transactionsCollection
@@ -313,7 +373,6 @@ async function run() {
       const user = await usersCollection.findOne({
         $or: [{ mobile: mobile }],
       });
-      // console.log(user);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -336,7 +395,6 @@ async function run() {
           digicashProfit,
           timestamp: new Date(),
         };
-        console.log(transaction);
         const session = await client.startSession();
         session.startTransaction();
 
@@ -373,7 +431,6 @@ async function run() {
           timestamp: new Date(),
         };
 
-        console.log(transaction);
         const session = await client.startSession();
         session.startTransaction();
 
@@ -409,8 +466,6 @@ async function run() {
           totalAmount,
           timestamp: new Date(),
         };
-
-        console.log(transaction);
         const session = await client.startSession();
         session.startTransaction();
 
@@ -438,15 +493,17 @@ async function run() {
         res.status(201).send({ message: "Your transaction is successful." });
       }
     });
-    app.post('/cashin-request', verifyToken, async (req, res) => {
+    app.post("/cashin-request", verifyToken, async (req, res) => {
       try {
         const { mobile, recipient, amount } = req.body;
-    
+
         // Validate the amount
         if (amount < 50) {
-          return res.status(400).send({ message: "Transaction amount must be at least 50 Taka." });
+          return res
+            .status(400)
+            .send({ message: "Transaction amount must be at least 50 Taka." });
         }
-    
+
         // Create a cash-in request
         const cashinRequest = {
           mobile,
@@ -456,47 +513,100 @@ async function run() {
           status: "pending", // Set the initial status to pending
           timestamp: new Date(),
         };
-    
+
         // Insert the request into the transactions collection
         await transactionsCollection.insertOne(cashinRequest);
-    
-        res.status(201).send({ message: "Cash-in request created successfully." });
+
+        res
+          .status(201)
+          .send({ message: "Cash-in request created successfully." });
       } catch (err) {
         console.error("Error creating cash-in request:", err);
         res.status(500).send({ message: "Server error" });
       }
     });
-    app.post('/approve-cashin', verifyToken, async (req, res) => {
+    app.post("/approve-cashin", verifyToken, async (req, res) => {
       try {
         const { requestId, agentMobile } = req.body;
-    
+
         // Find the cash-in request
-        const cashinRequest = await transactionsCollection.findOne({ _id: new ObjectId(requestId), status: "pending" });
-    
+        const cashinRequest = await transactionsCollection.findOne({
+          _id: new ObjectId(requestId),
+          status: "pending",
+        });
+
         if (!cashinRequest) {
-          return res.status(404).send({ message: "Cash-in request not found or already approved." });
+          return res.status(404).send({
+            message: "Cash-in request not found or already approved.",
+          });
         }
-    
+
         // Check the agent's balance
         const agent = await usersCollection.findOne({ recipient: agentMobile });
         if (agent?.balance < cashinRequest.amount) {
-          return res.status(400).send({ message: "Agent does not have enough balance." });
+          return res
+            .status(400)
+            .send({ message: "Agent does not have enough balance." });
         }
-    
+
         // Update the balances
-        await usersCollection.updateOne({ mobile: cashinRequest.mobile }, { $inc: { balance: cashinRequest.amount } });
-        await usersCollection.updateOne({ mobile: agentMobile }, { $inc: { balance: -cashinRequest.amount } });
-    
+        await usersCollection.updateOne(
+          { mobile: cashinRequest.mobile },
+          { $inc: { balance: cashinRequest.amount } }
+        );
+        await usersCollection.updateOne(
+          { mobile: agentMobile },
+          { $inc: { balance: -cashinRequest.amount } }
+        );
+
         // Update the cash-in request status
-        await transactionsCollection.updateOne({ _id: new ObjectId(requestId) }, { $set: { status: "approved",totalAmount:cashinRequest.amount } });
-    
-        res.status(200).send({ message: "Cash-in request approved successfully." });
+        await transactionsCollection.updateOne(
+          { _id: new ObjectId(requestId) },
+          { $set: { status: "approved", totalAmount: cashinRequest.amount } }
+        );
+
+        res
+          .status(200)
+          .send({ message: "Cash-in request approved successfully." });
       } catch (err) {
         console.error("Error approving cash-in request:", err);
         res.status(500).send({ message: "Server error" });
       }
     });
-    
+    // Decline Cash-In Request
+    app.post("/decline-cashin", verifyToken, async (req, res) => {
+      try {
+        const { requestId } = req.body;
+
+        // Find the cash-in request
+        const cashinRequest = await transactionsCollection.findOne({
+          _id: new ObjectId(requestId),
+          status: "pending",
+        });
+
+        if (!cashinRequest) {
+          return res
+            .status(404)
+            .send({
+              message: "Cash-in request not found or already processed.",
+            });
+        }
+
+        // Update the cash-in request status to declined
+        await transactionsCollection.updateOne(
+          { _id: new ObjectId(requestId) },
+          { $set: { status: "declined" } }
+        );
+
+        res
+          .status(200)
+          .send({ message: "Cash-in request declined successfully." });
+      } catch (err) {
+        console.error("Error declining cash-in request:", err);
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
