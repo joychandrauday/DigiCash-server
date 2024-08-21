@@ -11,13 +11,14 @@ const port = process.env.PORT || 8000;
 
 // middleware
 const corsOptions = {
-  origin: ["http://localhost:5173", "http://localhost:5174","https://digitalcash.web.app"],
+  origin: ["http://localhost:5173", "https://digitalcash.web.app"],
   credentials: true,
   optionSuccessStatus: 200,
 };
+// Content Security Policy Middleware
 app.use(cors(corsOptions));
-app.use(express.json());
 app.use(cookieParser());
+app.use(express.json());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nsswhi9.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
@@ -31,7 +32,6 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
     const usersCollection = client.db("DigiCash").collection("users");
     const transactionsCollection = client
       .db("DigiCash")
@@ -227,20 +227,31 @@ async function run() {
         .send({ success: true });
     });
 
-    // Logout
+    // Logout route
     app.get("/logout", async (req, res) => {
       try {
-        res
-          .clearCookie("token", {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-            path: "/", // Make sure the path matches where the cookie was set
-          })
+        // Clear the 'token' cookie
+        res.clearCookie("token", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+          path: "/",
+        });
+
+        // Send a successful logout response
+        return res
           .status(200)
-          .send({ success: true });
+          .send({ success: true, message: "Logged out successfully" });
       } catch (err) {
-        res.status(500).send(err);
+        // Handle errors and send a response
+        console.error("Logout Error:", err);
+        return res
+          .status(500)
+          .send({
+            success: false,
+            message: "Failed to log out",
+            error: err.message,
+          });
       }
     });
 
@@ -585,11 +596,9 @@ async function run() {
         });
 
         if (!cashinRequest) {
-          return res
-            .status(404)
-            .send({
-              message: "Cash-in request not found or already processed.",
-            });
+          return res.status(404).send({
+            message: "Cash-in request not found or already processed.",
+          });
         }
 
         // Update the cash-in request status to declined
