@@ -33,17 +33,14 @@ backend for DigiCash Project.
 
 ## available-scripts
 
-    ```bash
     npm run dev /
     npm run build /
     nodemon index.js
-    ```
+  
 
 ## environment-variables
 
-    ```bash
+    
     DB_USER=your_mongodb_database_user
     DB_PASS=your_mongodb_database_password
     ACCESS_TOKEN_SECRET=your_access_token_secret
-
-    ```
