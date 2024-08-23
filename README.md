@@ -1,4 +1,4 @@
-# DigiShop Frontend
+# DigiCash Frontend
 
 backend for DigiCash Project.
 
